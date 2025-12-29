@@ -1,0 +1,13 @@
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+SYSTEM_EMAIL = os.getenv("SYSTEM_EMAIL")
+MASTER_SHEET_ID = os.getenv("MASTER_SHEET_ID")
+
+EMAIL_BATCH_SIZE = 100
+EMAIL_RETRY_LIMIT = 3
+
+NO_RESPONSE_DAYS_BIWEEKLY = 180
+NO_RESPONSE_DAYS_MONTHLY = 240

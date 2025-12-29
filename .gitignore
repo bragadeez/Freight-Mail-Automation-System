@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+.env
+.env.*
+
+# Google credentials
+credentials/
+token.json
+
+# Runtime data
+data/input_pdfs/
+data/extracted_text/
+data/structured_reports/
+data/logs/
+data/.lock
+
+# OS / Editor
+.vscode/
+.DS_Store
