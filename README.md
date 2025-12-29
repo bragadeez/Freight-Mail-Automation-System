@@ -35,15 +35,39 @@ A fully automated, deterministic freight market intelligence system that:
 Freight Mail Automation/
 ├── main.py
 ├── config/
+│   ├── settings.py
+│   └── constants.py
 ├── mailer/
+│   ├── sender.py
+│   ├── template_builder.py
+│   ├── reply_reader.py
+│   └── reply_categorizer.py
 ├── mapping/
+│   └── customer_region_mapper.py
 ├── pdf_processing/
+│   ├── extractor.py
+│   ├── region_detector.py
+│   ├── region_splitter.py
+│   └── section_splitter.py
 ├── sheets/
+│   ├── base.py
+│   ├── customers.py
+│   ├── regions.py
+│   └── logs.py
 ├── utils/
-├── data/ (ignored in git)
+│   ├── google_auth.py
+│   ├── file_utils.py
+│   ├── text_utils.py
+│   └── logger.py
+├── data/                  # ignored in git
+│   ├── input_pdfs/
+│   ├── extracted_text/
+│   ├── structured_reports/
+│   └── logs/
 ├── requirements.txt
 ├── .env.example
 └── README.md
+
 
 ## ⚠️ Notes
 
