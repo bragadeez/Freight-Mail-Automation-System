@@ -31,7 +31,7 @@ A fully automated, deterministic freight market intelligence system that:
 8. Logging & audit trail
 
 ## 📁 Project Structure
-
+```text
 Freight Mail Automation/
 ├── main.py
 ├── config/
@@ -67,6 +67,7 @@ Freight Mail Automation/
 ├── requirements.txt
 ├── .env.example
 └── README.md
+```
 
 
 ## ⚠️ Notes
