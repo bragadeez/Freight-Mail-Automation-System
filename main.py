@@ -4,9 +4,12 @@ import time
 
 from utils.logger import setup_logger
 from utils.file_utils import get_latest_pdf
+from config.constants import REGION_ALIASES
 from utils.text_utils import extract_week_number
 
+from pdf_processing.layout_extractor import extract_layout_blocks, split_blocks_by_region
 from pdf_processing.extractor import extract_text_exact
+from pdf_processing.layout_extractor import extract_layout_blocks
 from pdf_processing.region_detector import detect_regions
 from pdf_processing.section_splitter import split_sections
 from pdf_processing.region_splitter import split_by_subject
@@ -63,6 +66,15 @@ def main():
     # --------------------------------------------------
     full_text = "\n".join(extracted["pages"].values())
     region_blocks = split_by_subject(full_text)
+    normalized_blocks = {}
+    for region, block in region_blocks.items():
+        normalized = REGION_ALIASES.get(region, region)
+        normalized_blocks[normalized] = block
+
+    region_blocks = normalized_blocks
+    subject_regions = list(region_blocks.keys())
+
+    logger.info(f"Subject Regions (normalized): {subject_regions}")
     subject_regions = list(region_blocks.keys())
     logger.info(f"Subject Regions (source of truth): {subject_regions}")
 
@@ -72,12 +84,20 @@ def main():
     }
 
     for region, block in region_blocks.items():
-        body_text = block["body"]   # ✅ extract string
+        all_blocks = extract_layout_blocks(pdf_path)
+        region_blocks_map = split_blocks_by_region(all_blocks)
 
-        structured_report["regions"][region] = {
-            "subject": block["subject"],
-            "sections": split_sections(body_text)
+        structured_report = {
+            "week": week,
+            "regions": {}
         }
+
+        for region, blocks in region_blocks_map.items():
+            structured_report["regions"][region] = {
+                "subject": region_blocks.get(region, {}).get("subject", ""),
+                "blocks": blocks
+            }
+
 
 
     os.makedirs("data/structured_reports", exist_ok=True)
@@ -168,9 +188,10 @@ def main():
             body = build_email_body_html(
                 contact_name,
                 region,
-                region_content,
+                region_content["blocks"],
                 week
             )
+
 
             success, error = send_email(email, subject, body)
 

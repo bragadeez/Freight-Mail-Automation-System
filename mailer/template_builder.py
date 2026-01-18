@@ -1,12 +1,11 @@
-from mailer.section_formatter import format_text_block
+from mailer.block_html_renderer import render_blocks_to_html
 from mailer.html_utils import escape
 
-def build_email_body_html(contact_name, region, region_content, week):
+def build_email_body_html(contact_name, region, region_blocks, week):
     name = contact_name if contact_name else "Customer"
 
     html_parts = []
 
-    # Header
     html_parts.append(f"""
     <html>
     <body style="font-family: Arial, sans-serif; font-size: 14px; color: #000;">
@@ -19,16 +18,9 @@ def build_email_body_html(contact_name, region, region_content, week):
     <hr>
     """)
 
-    # Sections
-    sections = region_content.get("sections", {})
-    for section_name, content in sections.items():
-        if not content:
-            continue
+    # ⬇️ CORE CHANGE: render blocks directly
+    html_parts.append(render_blocks_to_html(region_blocks))
 
-        html_parts.append(f"<h3>{escape(section_name.upper())}</h3>")
-        html_parts.append(format_text_block(content))
-
-    # Footer
     html_parts.append("""
     <hr>
     <p>

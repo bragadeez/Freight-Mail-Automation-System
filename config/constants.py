@@ -68,3 +68,10 @@ COUNTRY_REGION_MAP = {
     # Russia & CIS
     "Russia": "Russia"
 }
+
+REGION_ALIASES = {
+    "India Import": "India",
+    "India Export": "India",
+    "US Import": "United States",
+    "US Export": "United States"
+}
