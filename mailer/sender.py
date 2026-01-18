@@ -1,15 +1,15 @@
 import base64
+import time
 from email.mime.text import MIMEText
 from googleapiclient.discovery import build
 from utils.google_auth import get_credentials
 from config.settings import SYSTEM_EMAIL, EMAIL_RETRY_LIMIT
-import time
 
-def send_email(to_email, subject, body):
+def send_email(to_email, subject, html_body):
     creds = get_credentials()
     service = build("gmail", "v1", credentials=creds)
 
-    message = MIMEText(body)
+    message = MIMEText(html_body, "html")
     message["to"] = to_email
     message["from"] = SYSTEM_EMAIL
     message["subject"] = subject

@@ -2,6 +2,10 @@ import re
 from config.constants import SECTION_KEYWORDS
 
 def split_sections(region_text: str):
+    if not isinstance(region_text, str):
+        raise TypeError(
+            f"split_sections expected string, got {type(region_text)}"
+        )
     sections = {}
     positions = []
 

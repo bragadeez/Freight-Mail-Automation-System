@@ -8,8 +8,8 @@ from utils.text_utils import extract_week_number
 
 from pdf_processing.extractor import extract_text_exact
 from pdf_processing.region_detector import detect_regions
-from pdf_processing.region_splitter import split_by_region
 from pdf_processing.section_splitter import split_sections
+from pdf_processing.region_splitter import split_by_subject
 
 from sheets.customers import load_active_customers, update_customer_after_reply
 from sheets.regions import sync_regions
@@ -17,7 +17,7 @@ from sheets.logs import log_email
 
 from mapping.customer_region_mapper import map_customer_to_regions
 
-from mailer.template_builder import build_email_body
+from mailer.template_builder import build_email_body_html
 from mailer.sender import send_email
 from mailer.reply_reader import read_recent_replies
 from mailer.reply_categorizer import categorize_reply
@@ -55,29 +55,30 @@ def main():
     if week == "UNKNOWN":
         logger.warning("Week number could not be detected")
 
-    regions = detect_regions(extracted["pages"])
+    # regions = detect_regions(extracted["pages"])
 
     logger.info(f"Detected Week: {week}")
-    logger.info(f"Detected Regions: {regions}")
-
-    if not regions:
-        logger.error("No regions detected in PDF — aborting run")
-        return
-
     # --------------------------------------------------
     # STEP 4: Split content by region and sections
     # --------------------------------------------------
-    region_blocks = split_by_region(extracted["pages"], regions)
+    full_text = "\n".join(extracted["pages"].values())
+    region_blocks = split_by_subject(full_text)
+    subject_regions = list(region_blocks.keys())
+    logger.info(f"Subject Regions (source of truth): {subject_regions}")
 
     structured_report = {
         "week": week,
         "regions": {}
     }
 
-    for region, text in region_blocks.items():
+    for region, block in region_blocks.items():
+        body_text = block["body"]   # ✅ extract string
+
         structured_report["regions"][region] = {
-            "sections": split_sections(text)
+            "subject": block["subject"],
+            "sections": split_sections(body_text)
         }
+
 
     os.makedirs("data/structured_reports", exist_ok=True)
     structured_path = f"data/structured_reports/Week{week}_structured.json"
@@ -93,7 +94,7 @@ def main():
     # STEP 5: Google Sheets – Region Master sync
     # --------------------------------------------------
     try:
-        sync_regions(regions, week)
+        sync_regions(subject_regions, week)
         logger.info("Region_Master sheet synced successfully")
     except Exception as e:
         logger.error(f"Failed to sync Region_Master: {e}")
@@ -116,7 +117,7 @@ def main():
     mailing_plan = []
 
     for customer in customers:
-        customer_regions = map_customer_to_regions(customer, regions)
+        customer_regions = map_customer_to_regions(customer, subject_regions)
 
         if "UNKNOWN" in customer_regions:
             logger.warning(
@@ -162,13 +163,13 @@ def main():
                 )
                 continue
 
-            subject = f"Weekly Freight Market Update — {region} | Week {week}"
+            subject = region_blocks[region]["subject"]
 
-            body = build_email_body(
-                contact_name=contact_name,
-                region=region,
-                region_content=region_content,
-                week=week
+            body = build_email_body_html(
+                contact_name,
+                region,
+                region_content,
+                week
             )
 
             success, error = send_email(email, subject, body)
