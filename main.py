@@ -4,15 +4,12 @@ import time
 
 from utils.logger import setup_logger
 from utils.file_utils import get_latest_pdf
-from config.constants import REGION_ALIASES
 from utils.text_utils import extract_week_number
 
-from pdf_processing.layout_extractor import extract_layout_blocks, split_blocks_by_region
-from pdf_processing.extractor import extract_text_exact
-from pdf_processing.layout_extractor import extract_layout_blocks
-from pdf_processing.region_detector import detect_regions
-from pdf_processing.section_splitter import split_sections
-from pdf_processing.region_splitter import split_by_subject
+from pdf_processing.layout_extractor import (
+    extract_layout_blocks,
+    split_blocks_by_region
+)
 
 from sheets.customers import load_active_customers, update_customer_after_reply
 from sheets.regions import sync_regions
@@ -26,6 +23,7 @@ from mailer.reply_reader import read_recent_replies
 from mailer.reply_categorizer import categorize_reply
 
 from config.settings import EMAIL_BATCH_SIZE
+from config.constants import REGION_ALIASES
 
 
 def main():
@@ -43,62 +41,58 @@ def main():
         return
 
     # --------------------------------------------------
-    # STEP 2: Extract raw text (EXACT content)
+    # STEP 2: Extract week number (text-only, safe)
     # --------------------------------------------------
-    raw_text_path = "data/extracted_text/raw_text.json"
-    extracted = extract_text_exact(pdf_path, raw_text_path)
-    logger.info("Raw text extracted successfully")
+    try:
+        from pdf_processing.extractor import extract_text_exact
 
-    # --------------------------------------------------
-    # STEP 3: Detect week number and regions
-    # --------------------------------------------------
-    combined_text = " ".join(extracted["pages"].values())
-
-    week = extract_week_number(combined_text)
-    if week == "UNKNOWN":
-        logger.warning("Week number could not be detected")
-
-    # regions = detect_regions(extracted["pages"])
+        raw = extract_text_exact(
+            pdf_path,
+            "data/extracted_text/raw_text.json"
+        )
+        combined_text = " ".join(raw["pages"].values())
+        week = extract_week_number(combined_text)
+    except Exception:
+        week = "UNKNOWN"
 
     logger.info(f"Detected Week: {week}")
+
     # --------------------------------------------------
-    # STEP 4: Split content by region and sections
+    # STEP 3: Layout-aware extraction (SINGLE source of truth)
     # --------------------------------------------------
-    full_text = "\n".join(extracted["pages"].values())
-    region_blocks = split_by_subject(full_text)
-    normalized_blocks = {}
-    for region, block in region_blocks.items():
+    logger.info("Extracting layout-aware blocks")
+    all_blocks = extract_layout_blocks(pdf_path)
+
+    region_blocks_map = split_blocks_by_region(all_blocks)
+
+    if not region_blocks_map:
+        logger.error("No regions detected from layout titles — aborting")
+        return
+
+    # --------------------------------------------------
+    # STEP 4: Normalize region names (aliases)
+    # --------------------------------------------------
+    normalized_regions = {}
+
+    for region, blocks in region_blocks_map.items():
         normalized = REGION_ALIASES.get(region, region)
-        normalized_blocks[normalized] = block
+        normalized_regions[normalized] = blocks
 
-    region_blocks = normalized_blocks
-    subject_regions = list(region_blocks.keys())
+    subject_regions = list(normalized_regions.keys())
+    logger.info(f"Region source of truth (layout): {subject_regions}")
 
-    logger.info(f"Subject Regions (normalized): {subject_regions}")
-    subject_regions = list(region_blocks.keys())
-    logger.info(f"Subject Regions (source of truth): {subject_regions}")
-
+    # --------------------------------------------------
+    # STEP 5: Persist structured report (audit/debug)
+    # --------------------------------------------------
     structured_report = {
         "week": week,
         "regions": {}
     }
 
-    for region, block in region_blocks.items():
-        all_blocks = extract_layout_blocks(pdf_path)
-        region_blocks_map = split_blocks_by_region(all_blocks)
-
-        structured_report = {
-            "week": week,
-            "regions": {}
+    for region, blocks in normalized_regions.items():
+        structured_report["regions"][region] = {
+            "blocks": blocks
         }
-
-        for region, blocks in region_blocks_map.items():
-            structured_report["regions"][region] = {
-                "subject": region_blocks.get(region, {}).get("subject", ""),
-                "blocks": blocks
-            }
-
-
 
     os.makedirs("data/structured_reports", exist_ok=True)
     structured_path = f"data/structured_reports/Week{week}_structured.json"
@@ -106,12 +100,10 @@ def main():
     with open(structured_path, "w", encoding="utf-8") as f:
         json.dump(structured_report, f, indent=2, ensure_ascii=False)
 
-    logger.info(
-        f"Structured report saved for Week {week}: {structured_path}"
-    )
+    logger.info(f"Structured report saved: {structured_path}")
 
     # --------------------------------------------------
-    # STEP 5: Google Sheets – Region Master sync
+    # STEP 6: Google Sheets – Region Master sync
     # --------------------------------------------------
     try:
         sync_regions(subject_regions, week)
@@ -121,7 +113,7 @@ def main():
         return
 
     # --------------------------------------------------
-    # STEP 6: Load active customers
+    # STEP 7: Load active customers
     # --------------------------------------------------
     customers = load_active_customers()
 
@@ -132,12 +124,15 @@ def main():
     logger.info(f"Loaded {len(customers)} active customers")
 
     # --------------------------------------------------
-    # STEP 7: Customer → Region Mapping
+    # STEP 8: Customer → Region Mapping
     # --------------------------------------------------
     mailing_plan = []
 
     for customer in customers:
-        customer_regions = map_customer_to_regions(customer, subject_regions)
+        customer_regions = map_customer_to_regions(
+            customer,
+            subject_regions
+        )
 
         if "UNKNOWN" in customer_regions:
             logger.warning(
@@ -157,52 +152,52 @@ def main():
     logger.info(f"Mailing plan prepared for {len(mailing_plan)} customers")
 
     # --------------------------------------------------
-    # STEP 8: Email Generation & Sending
-    # (PHASE 7 – Dispatch)
+    # STEP 9: Email Generation & Sending
     # --------------------------------------------------
     sent_count = 0
-    processed_pairs = set()  # (email, region)
+    processed_pairs = set()
 
     for item in mailing_plan:
         email = item["Email"]
         company = item["Company"]
         contact_name = item.get("Contact Name", "")
-        customer_regions = item["Regions"]
+        regions = item["Regions"]
 
-        for region in customer_regions:
+        for region in regions:
             pair = (email, region)
             if pair in processed_pairs:
                 continue
 
             processed_pairs.add(pair)
 
-            region_content = structured_report["regions"].get(region)
-            if not region_content:
+            region_data = structured_report["regions"].get(region)
+            if not region_data:
                 logger.warning(
-                    f"No structured content found for region {region}"
+                    f"No layout blocks found for region {region}"
                 )
                 continue
-
-            subject = region_blocks[region]["subject"]
 
             body = build_email_body_html(
                 contact_name,
                 region,
-                region_content["blocks"],
+                region_data["blocks"],
                 week
             )
 
+            subject = (
+                f"Week {week} – {region} Freight Market Update"
+                if week != "UNKNOWN"
+                else f"{region} Freight Market Update"
+            )
 
             success, error = send_email(email, subject, body)
-
-            status = "Sent" if success else "Failed"
 
             log_email(
                 week=week,
                 region=region,
                 company=company,
                 email=email,
-                status=status,
+                status="Sent" if success else "Failed",
                 error=error
             )
 
@@ -213,14 +208,12 @@ def main():
 
             sent_count += 1
 
-            # Gmail safety batching
             if EMAIL_BATCH_SIZE and sent_count % EMAIL_BATCH_SIZE == 0:
                 logger.info("Batch limit reached — cooling down")
                 time.sleep(10)
 
     # --------------------------------------------------
-    # STEP 9: Reply Processing
-    # (PHASE 8 – Engagement Handling)
+    # STEP 10: Reply Processing
     # --------------------------------------------------
     replies = read_recent_replies(days=7)
 
@@ -235,7 +228,6 @@ def main():
     # COMPLETION
     # --------------------------------------------------
     logger.info(f"Emails processed: {sent_count}")
-    logger.info("Phase 7 & 8 completed successfully")
     logger.info("=== Freight Market Automation Finished ===")
 
 

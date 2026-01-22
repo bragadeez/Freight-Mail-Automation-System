@@ -8,7 +8,13 @@ def build_email_body_html(contact_name, region, region_blocks, week):
 
     html_parts.append(f"""
     <html>
-    <body style="font-family: Arial, sans-serif; font-size: 14px; color: #000;">
+    <body style="
+    font-family: Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    color: #000;
+">
+
     <p>Dear {escape(name)},</p>
 
     <p>
