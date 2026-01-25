@@ -36,6 +36,9 @@ Return format:
   }}
 }}
 
+Output format MUST be application/json.
+Return only a single JSON object.
+
 TEXT:
 {numbered_text}
 """

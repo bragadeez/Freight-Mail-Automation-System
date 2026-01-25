@@ -1,6 +1,9 @@
 import json
 import os
 import time
+from config.settings import USE_LLM_SECTIONS
+from pdf_processing.llm.section_parser import parse_sections_with_llm
+from pdf_processing.section_splitter import split_sections
 
 from utils.logger import setup_logger
 from utils.file_utils import get_latest_pdf
@@ -25,6 +28,28 @@ from mailer.reply_categorizer import categorize_reply
 from config.settings import EMAIL_BATCH_SIZE
 from config.constants import REGION_ALIASES
 
+def get_sections(region_text: str):
+    logger = setup_logger()
+    """
+    Decide whether to use LLM-based or regex-based sectioning.
+    Always returns a valid sections dict.
+    """
+
+    if USE_LLM_SECTIONS:
+        try:
+            sections, debug_map = parse_sections_with_llm(region_text)
+
+            # Safety check: must extract at least one section
+            if sections:
+                return sections
+
+        except Exception as e:
+            logger.warning(
+                f"LLM sectioning failed, falling back to regex: {e}"
+            )
+
+    # Fallback (always safe)
+    return get_sections(region_text)
 
 def main():
     logger = setup_logger()

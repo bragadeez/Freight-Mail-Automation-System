@@ -1,5 +1,4 @@
 import os
-import json
 from dotenv import load_dotenv
 import google.generativeai as genai
 
@@ -11,26 +10,22 @@ if not API_KEY:
 
 genai.configure(api_key=API_KEY)
 
-MODEL_NAME = "models/gemini-1.5-flash-001"  # ✅ correct SDK model id
+# Gemini 2 Flash (free tier)
+MODEL_NAME = "models/gemini-2.5-flash"
 
-def gemini_llm(prompt: str) -> dict:
+
+def gemini_llm(prompt: str) -> str:
     model = genai.GenerativeModel(
         MODEL_NAME,
         generation_config={
             "temperature": 0,
-            "top_p": 1,
-            "max_output_tokens": 512
+            "max_output_tokens": 256
         }
     )
 
     response = model.generate_content(prompt)
-    text = response.text.strip()
 
-    # Strip markdown fences if present
-    if text.startswith("```"):
-        text = text.strip("`").replace("json", "", 1).strip()
+    if not response.text:
+        raise ValueError("Empty response from Gemini")
 
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        raise ValueError(f"Gemini returned non-JSON:\n{text}")
+    return response.text.strip()

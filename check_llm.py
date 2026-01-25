@@ -1,13 +1,25 @@
-from pdf_processing.llm.gemini_client import gemini_llm
 from pdf_processing.llm.section_parser import parse_sections_with_llm
 
-with open("sample_region.txt", "r", encoding="utf-8") as f:
-    text = f.read()
+sample_text = """
+SUMMARY
+This week shows moderate improvement.
 
-sections, _ = parse_sections_with_llm(
-    "GCC",
-    text,
-    gemini_llm
-)
+OCEAN FREIGHT
+Rates are stable across APAC.
 
-print(sections)
+AIR FREIGHT
+Demand remains steady.
+
+ADVISORY
+Book early.
+"""
+
+sections, line_map = parse_sections_with_llm(sample_text)
+
+print("=== LINE MAP ===")
+print(line_map)
+
+print("\n=== SECTIONS ===")
+for k, v in sections.items():
+    print(f"\n--- {k} ---")
+    print(v)
