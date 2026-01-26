@@ -1,9 +1,6 @@
 import json
 import os
 import time
-from config.settings import USE_LLM_SECTIONS
-from pdf_processing.llm.section_parser import parse_sections_with_llm
-from pdf_processing.section_splitter import split_sections
 
 from utils.logger import setup_logger
 from utils.file_utils import get_latest_pdf
@@ -14,43 +11,54 @@ from pdf_processing.layout_extractor import (
     split_blocks_by_region
 )
 
+from pdf_processing.llm.section_parser import parse_sections_with_llm
+from pdf_processing.section_splitter import split_sections
+
+from processing.canonical_builder import build_canonical_report
+from processing.canonical_normalizer import normalize_sections
+
 from sheets.customers import load_active_customers, update_customer_after_reply
 from sheets.regions import sync_regions
 from sheets.logs import log_email
 
 from mapping.customer_region_mapper import map_customer_to_regions
 
-from mailer.template_builder import build_email_body_html
+from mailer.deterministic_renderer import render_email_html
 from mailer.sender import send_email
 from mailer.reply_reader import read_recent_replies
 from mailer.reply_categorizer import categorize_reply
 
-from config.settings import EMAIL_BATCH_SIZE
+from config.settings import EMAIL_BATCH_SIZE, USE_LLM_SECTIONS
 from config.constants import REGION_ALIASES
 
+
+# --------------------------------------------------
+# SECTION EXTRACTION (LLM WITH SAFE FALLBACK)
+# --------------------------------------------------
 def get_sections(region_text: str):
-    logger = setup_logger()
     """
     Decide whether to use LLM-based or regex-based sectioning.
     Always returns a valid sections dict.
     """
+    logger = setup_logger()
 
     if USE_LLM_SECTIONS:
         try:
             sections, debug_map = parse_sections_with_llm(region_text)
-
-            # Safety check: must extract at least one section
             if sections:
                 return sections
-
         except Exception as e:
             logger.warning(
                 f"LLM sectioning failed, falling back to regex: {e}"
             )
 
-    # Fallback (always safe)
-    return get_sections(region_text)
+    # Deterministic fallback
+    return split_sections(region_text)
 
+
+# --------------------------------------------------
+# MAIN PIPELINE
+# --------------------------------------------------
 def main():
     logger = setup_logger()
     logger.info("=== Freight Market Automation Started ===")
@@ -66,7 +74,7 @@ def main():
         return
 
     # --------------------------------------------------
-    # STEP 2: Extract week number (text-only, safe)
+    # STEP 2: Extract week number (safe text-only)
     # --------------------------------------------------
     try:
         from pdf_processing.extractor import extract_text_exact
@@ -83,11 +91,10 @@ def main():
     logger.info(f"Detected Week: {week}")
 
     # --------------------------------------------------
-    # STEP 3: Layout-aware extraction (SINGLE source of truth)
+    # STEP 3: Layout-aware extraction (SOURCE OF TRUTH)
     # --------------------------------------------------
     logger.info("Extracting layout-aware blocks")
     all_blocks = extract_layout_blocks(pdf_path)
-
     region_blocks_map = split_blocks_by_region(all_blocks)
 
     if not region_blocks_map:
@@ -107,17 +114,12 @@ def main():
     logger.info(f"Region source of truth (layout): {subject_regions}")
 
     # --------------------------------------------------
-    # STEP 5: Persist structured report (audit/debug)
+    # STEP 5: Persist structured report (debug / audit)
     # --------------------------------------------------
     structured_report = {
         "week": week,
-        "regions": {}
+        "regions": normalized_regions
     }
-
-    for region, blocks in normalized_regions.items():
-        structured_report["regions"][region] = {
-            "blocks": blocks
-        }
 
     os.makedirs("data/structured_reports", exist_ok=True)
     structured_path = f"data/structured_reports/Week{week}_structured.json"
@@ -177,7 +179,7 @@ def main():
     logger.info(f"Mailing plan prepared for {len(mailing_plan)} customers")
 
     # --------------------------------------------------
-    # STEP 9: Email Generation & Sending
+    # STEP 9: Email Generation & Sending (FINAL)
     # --------------------------------------------------
     sent_count = 0
     processed_pairs = set()
@@ -192,22 +194,46 @@ def main():
             pair = (email, region)
             if pair in processed_pairs:
                 continue
-
             processed_pairs.add(pair)
 
-            region_data = structured_report["regions"].get(region)
-            if not region_data:
+            region_blocks = structured_report["regions"].get(region)
+            if not region_blocks:
                 logger.warning(
                     f"No layout blocks found for region {region}"
                 )
                 continue
 
-            body = build_email_body_html(
-                contact_name,
-                region,
-                region_data["blocks"],
-                week
+            # -------------------------------
+            # Convert blocks → raw text
+            # -------------------------------
+            region_text = "\n".join(
+                b.get("text", "")
+                for b in region_blocks
+                if b["type"] in ("paragraph", "bullet")
             )
+
+            # -------------------------------
+            # Section extraction
+            # -------------------------------
+            sections = get_sections(region_text)
+
+            # -------------------------------
+            # Canonical + normalized report
+            # -------------------------------
+            report = build_canonical_report(
+                week=week,
+                region=region,
+                section_text_map=sections
+            )
+
+            report["sections"] = normalize_sections(
+                report["sections"]
+            )
+
+            # -------------------------------
+            # FINAL HTML RENDER
+            # -------------------------------
+            html_body = render_email_html(report)
 
             subject = (
                 f"Week {week} – {region} Freight Market Update"
@@ -215,7 +241,7 @@ def main():
                 else f"{region} Freight Market Update"
             )
 
-            success, error = send_email(email, subject, body)
+            success, error = send_email(email, subject, html_body)
 
             log_email(
                 week=week,
