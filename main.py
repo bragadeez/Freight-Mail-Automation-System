@@ -1,5 +1,6 @@
 import os
 import time
+import re
 
 from utils.logger import setup_logger
 from utils.text_utils import extract_week_number
@@ -22,6 +23,34 @@ from config.settings import EMAIL_BATCH_SIZE
 # --------------------------------------------------
 # Helper: Get latest DOCX file
 # --------------------------------------------------
+
+def personalize_greeting(html, contact_name):
+
+    last_name = get_last_name(contact_name)
+
+    greeting = f"Dear {last_name},"
+
+    html = re.sub(
+        r"Dear\s+(Valued\s+Customer|Customer|Valued\s+Client)[,]?",
+        greeting,
+        html,
+        flags=re.IGNORECASE
+    )
+
+    return html
+
+def get_last_name(full_name):
+
+    if not full_name:
+        return "Customer"
+
+    parts = full_name.strip().split()
+
+    if len(parts) == 1:
+        return parts[0]
+
+    return parts[-1]
+
 def get_latest_docx(directory):
 
     files = [
@@ -62,7 +91,8 @@ def main():
     # STEP 2: Extract week number
     # --------------------------------------------------
     try:
-        week = extract_week_number(docx_path)
+        match = re.search(r"Week\s*(\d+)", docx_path)
+        week = match.group(1) if match else "UNKNOWN"
     except Exception:
         week = "UNKNOWN"
 
@@ -161,16 +191,23 @@ def main():
 
             html_body = regions_html.get(region)
 
+            html_body = personalize_greeting(
+                html_body,
+                contact_name
+            )
+
             if not html_body:
                 logger.warning(
                     f"No HTML content found for region {region}"
                 )
                 continue
 
+            company = item["Company"]
+
             subject = (
-                f"Week {week} – {region} Freight Market Update"
+                f"Week {week} – {region} Freight Market Update | {company}"
                 if week != "UNKNOWN"
-                else f"{region} Freight Market Update"
+                else f"{region} Freight Market Update | {company}"
             )
 
             success, error = send_email(email, subject, html_body)

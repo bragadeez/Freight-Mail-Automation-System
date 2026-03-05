@@ -6,10 +6,7 @@ def read_recent_replies(days=7):
     creds = get_credentials()
     service = build("gmail", "v1", credentials=creds)
 
-    query = (
-        f"is:inbox newer_than:{days}d "
-        f"subject:(Weekly Freight Market Update)"
-    )
+    query = f"is:inbox newer_than:{days}d"
 
     response = service.users().messages().list(
         userId="me",
@@ -29,11 +26,19 @@ def read_recent_replies(days=7):
         headers = msg_data["payload"]["headers"]
         body = ""
 
-        for part in msg_data["payload"].get("parts", []):
-            if part["mimeType"] == "text/plain":
-                body = base64.urlsafe_b64decode(
-                    part["body"]["data"]
-                ).decode("utf-8", errors="ignore")
+        payload = msg_data["payload"]
+
+        if "parts" in payload:
+            for part in payload["parts"]:
+                if part["mimeType"] == "text/plain":
+                    body = base64.urlsafe_b64decode(
+                        part["body"]["data"]
+                    ).decode("utf-8", errors="ignore")
+
+        else:
+            data = payload["body"].get("data")
+            if data:
+                body = base64.urlsafe_b64decode(data).decode("utf-8", errors="ignore")
 
         sender = next(
             (h["value"] for h in headers if h["name"] == "From"),

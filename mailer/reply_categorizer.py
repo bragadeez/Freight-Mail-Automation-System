@@ -7,7 +7,13 @@ RULES = {
         r"stop sending",
         r"no longer work",
         r"left the company",
-        r"wrong contact"
+        r"wrong contact",
+        r"no more updates",
+        r"do not send",
+        r"don't send",
+        r"not interested",
+        r"stop updates",
+        r"stop emails"
     ],
     "COMPLAINT": [
         r"spam",
