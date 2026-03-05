@@ -1,21 +1,10 @@
-import json
 import os
 import time
 
 from utils.logger import setup_logger
-from utils.file_utils import get_latest_pdf
 from utils.text_utils import extract_week_number
 
-from pdf_processing.layout_extractor import (
-    extract_layout_blocks,
-    split_blocks_by_region
-)
-
-from pdf_processing.llm.section_parser import parse_sections_with_llm
-from pdf_processing.section_splitter import split_sections
-
-from processing.canonical_builder import build_canonical_report
-from processing.canonical_normalizer import normalize_sections
+from docx_processing.docx_region_extractor import split_docx_to_regions
 
 from sheets.customers import load_active_customers, update_customer_after_reply
 from sheets.regions import sync_regions
@@ -23,114 +12,83 @@ from sheets.logs import log_email
 
 from mapping.customer_region_mapper import map_customer_to_regions
 
-from mailer.deterministic_renderer import render_email_html
 from mailer.sender import send_email
 from mailer.reply_reader import read_recent_replies
 from mailer.reply_categorizer import categorize_reply
 
-from config.settings import EMAIL_BATCH_SIZE, USE_LLM_SECTIONS
-from config.constants import REGION_ALIASES
+from config.settings import EMAIL_BATCH_SIZE
 
 
 # --------------------------------------------------
-# SECTION EXTRACTION (LLM WITH SAFE FALLBACK)
+# Helper: Get latest DOCX file
 # --------------------------------------------------
-def get_sections(region_text: str):
-    """
-    Decide whether to use LLM-based or regex-based sectioning.
-    Always returns a valid sections dict.
-    """
-    logger = setup_logger()
+def get_latest_docx(directory):
 
-    if USE_LLM_SECTIONS:
-        try:
-            sections, debug_map = parse_sections_with_llm(region_text)
-            if sections:
-                return sections
-        except Exception as e:
-            logger.warning(
-                f"LLM sectioning failed, falling back to regex: {e}"
-            )
+    files = [
+        f for f in os.listdir(directory)
+        if f.lower().endswith(".docx")
+    ]
 
-    # Deterministic fallback
-    return split_sections(region_text)
+    if not files:
+        raise FileNotFoundError("No DOCX found in input directory")
+
+    files.sort(
+        key=lambda f: os.path.getmtime(os.path.join(directory, f)),
+        reverse=True
+    )
+
+    return os.path.join(directory, files[0])
 
 
 # --------------------------------------------------
 # MAIN PIPELINE
 # --------------------------------------------------
 def main():
+
     logger = setup_logger()
     logger.info("=== Freight Market Automation Started ===")
 
     # --------------------------------------------------
-    # STEP 1: Load latest weekly PDF
+    # STEP 1: Load latest DOCX report
     # --------------------------------------------------
     try:
-        pdf_path = get_latest_pdf("data/input_pdfs")
-        logger.info(f"Using PDF: {pdf_path}")
+        docx_path = get_latest_docx("data/input_reports")
+        logger.info(f"Using DOCX: {docx_path}")
     except Exception as e:
-        logger.error(f"Failed to locate weekly PDF: {e}")
+        logger.error(f"Failed to locate DOCX report: {e}")
         return
 
     # --------------------------------------------------
-    # STEP 2: Extract week number (safe text-only)
+    # STEP 2: Extract week number
     # --------------------------------------------------
     try:
-        from pdf_processing.extractor import extract_text_exact
-
-        raw = extract_text_exact(
-            pdf_path,
-            "data/extracted_text/raw_text.json"
-        )
-        combined_text = " ".join(raw["pages"].values())
-        week = extract_week_number(combined_text)
+        week = extract_week_number(docx_path)
     except Exception:
         week = "UNKNOWN"
 
     logger.info(f"Detected Week: {week}")
 
     # --------------------------------------------------
-    # STEP 3: Layout-aware extraction (SOURCE OF TRUTH)
+    # STEP 3: Extract regions from DOCX
     # --------------------------------------------------
-    logger.info("Extracting layout-aware blocks")
-    all_blocks = extract_layout_blocks(pdf_path)
-    region_blocks_map = split_blocks_by_region(all_blocks)
+    logger.info("Extracting regions from DOCX")
 
-    if not region_blocks_map:
-        logger.error("No regions detected from layout titles — aborting")
+    try:
+        regions_html = split_docx_to_regions(docx_path)
+    except Exception as e:
+        logger.error(f"Failed to extract regions from DOCX: {e}")
         return
 
-    # --------------------------------------------------
-    # STEP 4: Normalize region names (aliases)
-    # --------------------------------------------------
-    normalized_regions = {}
+    if not regions_html:
+        logger.error("No regions detected — aborting")
+        return
 
-    for region, blocks in region_blocks_map.items():
-        normalized = REGION_ALIASES.get(region, region)
-        normalized_regions[normalized] = blocks
+    subject_regions = list(regions_html.keys())
 
-    subject_regions = list(normalized_regions.keys())
-    logger.info(f"Region source of truth (layout): {subject_regions}")
+    logger.info(f"Regions detected: {subject_regions}")
 
     # --------------------------------------------------
-    # STEP 5: Persist structured report (debug / audit)
-    # --------------------------------------------------
-    structured_report = {
-        "week": week,
-        "regions": normalized_regions
-    }
-
-    os.makedirs("data/structured_reports", exist_ok=True)
-    structured_path = f"data/structured_reports/Week{week}_structured.json"
-
-    with open(structured_path, "w", encoding="utf-8") as f:
-        json.dump(structured_report, f, indent=2, ensure_ascii=False)
-
-    logger.info(f"Structured report saved: {structured_path}")
-
-    # --------------------------------------------------
-    # STEP 6: Google Sheets – Region Master sync
+    # STEP 4: Sync regions to Google Sheets
     # --------------------------------------------------
     try:
         sync_regions(subject_regions, week)
@@ -140,7 +98,7 @@ def main():
         return
 
     # --------------------------------------------------
-    # STEP 7: Load active customers
+    # STEP 5: Load active customers
     # --------------------------------------------------
     customers = load_active_customers()
 
@@ -151,11 +109,12 @@ def main():
     logger.info(f"Loaded {len(customers)} active customers")
 
     # --------------------------------------------------
-    # STEP 8: Customer → Region Mapping
+    # STEP 6: Customer → Region Mapping
     # --------------------------------------------------
     mailing_plan = []
 
     for customer in customers:
+
         customer_regions = map_customer_to_regions(
             customer,
             subject_regions
@@ -179,61 +138,34 @@ def main():
     logger.info(f"Mailing plan prepared for {len(mailing_plan)} customers")
 
     # --------------------------------------------------
-    # STEP 9: Email Generation & Sending (FINAL)
+    # STEP 7: Email Generation & Sending
     # --------------------------------------------------
     sent_count = 0
     processed_pairs = set()
 
     for item in mailing_plan:
+
         email = item["Email"]
         company = item["Company"]
         contact_name = item.get("Contact Name", "")
         regions = item["Regions"]
 
         for region in regions:
+
             pair = (email, region)
+
             if pair in processed_pairs:
                 continue
+
             processed_pairs.add(pair)
 
-            region_blocks = structured_report["regions"].get(region)
-            if not region_blocks:
+            html_body = regions_html.get(region)
+
+            if not html_body:
                 logger.warning(
-                    f"No layout blocks found for region {region}"
+                    f"No HTML content found for region {region}"
                 )
                 continue
-
-            # -------------------------------
-            # Convert blocks → raw text
-            # -------------------------------
-            region_text = "\n".join(
-                b.get("text", "")
-                for b in region_blocks
-                if b["type"] in ("paragraph", "bullet")
-            )
-
-            # -------------------------------
-            # Section extraction
-            # -------------------------------
-            sections = get_sections(region_text)
-
-            # -------------------------------
-            # Canonical + normalized report
-            # -------------------------------
-            report = build_canonical_report(
-                week=week,
-                region=region,
-                section_text_map=sections
-            )
-
-            report["sections"] = normalize_sections(
-                report["sections"]
-            )
-
-            # -------------------------------
-            # FINAL HTML RENDER
-            # -------------------------------
-            html_body = render_email_html(report)
 
             subject = (
                 f"Week {week} – {region} Freight Market Update"
@@ -264,13 +196,19 @@ def main():
                 time.sleep(10)
 
     # --------------------------------------------------
-    # STEP 10: Reply Processing
+    # STEP 8: Reply Processing
     # --------------------------------------------------
     replies = read_recent_replies(days=7)
 
     for reply in replies:
+
         category = categorize_reply(reply["body"])
-        update_customer_after_reply(reply["from"], category)
+
+        update_customer_after_reply(
+            reply["from"],
+            category
+        )
+
         logger.info(
             f"Processed reply from {reply['from']} -> {category}"
         )
