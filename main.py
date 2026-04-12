@@ -91,7 +91,8 @@ def main():
     # STEP 2: Extract week number
     # --------------------------------------------------
     try:
-        match = re.search(r"Week\s*(\d+)", docx_path)
+        filename = os.path.basename(docx_path)
+        match = re.search(r"week\s*(\d+)", filename, re.IGNORECASE)
         week = match.group(1) if match else "UNKNOWN"
     except Exception:
         week = "UNKNOWN"

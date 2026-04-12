@@ -18,7 +18,7 @@ def build_email_body_html(contact_name, region, region_blocks, week):
     <p>Dear {escape(name)},</p>
 
     <p>
-      Please find below the <b>Week {week}</b> freight market update for
+      Please find below the freight market update{" for Week " + week if week != "UNKNOWN" else ""} for
       <b>{escape(region)}</b>.
     </p>
     <hr>
